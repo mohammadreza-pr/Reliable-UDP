@@ -10,52 +10,52 @@ class Packet:
 
 
 IP = '127.0.0.1'
-PORT = 12345
+PORT = 54321
+
+DEST_IP = '127.0.0.1'
+DEST_PORT = 5080
 
 receiver_socket = None
+sender_socket = None
 
+state = 0
 
-def send_ACK(last_ack, addr):
-    packet = Packet(seq_number=1, last_ack=last_ack, payload='')
-    receiver_socket.sendto(pickle.dumps(packet), addr)
-
-
-def ack_until_now(buffer):
-    sequence = sorted(buffer.keys())
-    for index, seq_number in enumerate(sequence[:-1]):
-        print(f'sequence number: {seq_number}, payload: {buffer[seq_number].payload}\n')
-        if sequence[index] + len(buffer[seq_number].payload) == sequence[index + 1]:
-            buffer.pop(seq_number)
-        else:
-            last_ack = sequence[index] + len(buffer[seq_number].payload)
-            buffer.pop(seq_number)
-            return buffer, last_ack
+packet = None
 
 
 def receiving_packets():
-    last_ack = 0
-    buffer = {}
+    global state
+    global packet
     while True:
-        data, addr = receiver_socket.recvfrom(4096)
-        packet = pickle.loads(data)
-        if packet.seq_number > last_ack:
-            if packet.seq_number not in buffer:
-                buffer[packet.seq_number] = packet
-            send_ACK(last_ack, addr)
-        elif packet.seq_number < last_ack:
-            send_ACK(last_ack, addr)
-        else:
-            if not buffer:
-                last_ack += len(packet.payload)
-                send_ACK(last_ack, addr)
+
+        if state == 0:
+            data, addr = receiver_socket.recvfrom(4096)
+            packet = pickle.loads(data)
+            if packet.seq_number == 1:
+                response = Packet(seq_number=0, last_ack=1, payload='')
+                receiver_socket.sendto(pickle.dumps(response), addr)
             else:
-                if packet.seq_number not in buffer:
-                    buffer[packet.seq_number] = packet
-                buffer, last_ack = ack_until_now(buffer)
-                send_ACK(last_ack, addr)
+                sender_socket.sendto(bytes(packet.payload, encoding='utf8'), (DEST_IP, DEST_PORT))
+                response = Packet(seq_number=0, last_ack=0, payload='')
+                receiver_socket.sendto(pickle.dumps(response), addr)
+                state = 1
+        elif state == 1:
+            data, addr = receiver_socket.recvfrom(4096)
+            packet = pickle.loads(data)
+            if packet.seq_number == 0:
+                response = Packet(seq_number=0, last_ack=0, payload='')
+                receiver_socket.sendto(pickle.dumps(response), addr)
+            else:
+                sender_socket.sendto(bytes(packet.payload, encoding='utf8'), (DEST_IP, DEST_PORT))
+                response = Packet(seq_number=0, last_ack=1, payload='')
+                receiver_socket.sendto(pickle.dumps(response), addr)
+                state = 0
 
 
 if __name__ == '__main__':
     receiver_socket = socket(AF_INET, SOCK_DGRAM)
     receiver_socket.bind((IP, PORT))
+
+    sender_socket = socket(AF_INET, SOCK_DGRAM)
+
     receiving_packets()
