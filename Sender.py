@@ -19,6 +19,12 @@ RECEIVER_PORT = 8050
 
 timeout_interval = 0.75
 
+state = 0
+start_time = None
+stop_thread = False
+clock = None
+packet = None
+
 
 def timer():
     global sender_socket
@@ -32,51 +38,61 @@ def timer():
             break
 
 
-if __name__ == '__main__':
-    sender_socket = socket(AF_INET, SOCK_DGRAM)
+def start_timer():
+    global start_time
+    global stop_thread
+    global clock
+    start_time = time.time()
+    stop_thread = False
+    clock = threading.Thread(target=timer)
+    clock.start()
 
-    receiver_socket = socket(AF_INET, SOCK_DGRAM)
-    receiver_socket.bind((RECEIVER_IP, RECEIVER_PORT))
 
-    state = 0
+def stop_timer():
+    global stop_thread
+    stop_thread = True
 
-    start_time = None
-    clock = None
 
-    packet = None
+def add_headers_and_send_packet(data, seq_number):
+    global packet
+    packet = Packet(seq_number, 0, data.decode())
+    sender_socket.sendto(pickle.dumps(packet), (DEST_IP, DEST_PORT))
 
+
+def stop_state_handler(seq_number, next_state):
+    global state
+    data, addr = receiver_socket.recvfrom(4096)
+    add_headers_and_send_packet(data, seq_number)
+    start_timer()
+    state = next_state
+
+
+def wait_state_handler(needed_ack, next_state):
+    global state
+    data, addr = sender_socket.recvfrom(4096)
+    response = pickle.loads(data)
+    if response.last_ack == needed_ack:
+        stop_timer()
+        state = next_state
+
+
+def sending_packets():
+    global state
     while True:
         if state == 0:
-            data, addr = receiver_socket.recvfrom(4096)
-            packet = Packet(0, 0, data.decode())
-            sender_socket.sendto(pickle.dumps(packet), (DEST_IP, DEST_PORT))
-            start_time = time.time()
-            stop_thread = False
-            clock = threading.Thread(target=timer)
-            clock.start()
-            state = 1
+            stop_state_handler(seq_number=0, next_state=1)
+
         elif state == 1:
-            data, addr = sender_socket.recvfrom(4096)
-            response = pickle.loads(data)
-            if response.last_ack == 1:
-                state = 1
-            else:
-                stop_thread = True
-                state = 2
+            wait_state_handler(needed_ack=0, next_state=2)
+
         elif state == 2:
-            data, addr = receiver_socket.recvfrom(4096)
-            packet = Packet(1, 0, data.decode())
-            sender_socket.sendto(pickle.dumps(packet), (DEST_IP, DEST_PORT))
-            start_time = time.time()
-            stop_thread = False
-            clock = threading.Thread(target=timer)
-            clock.start()
-            state = 3
+            stop_state_handler(seq_number=1, next_state=3)
         elif state == 3:
-            data, addr = sender_socket.recvfrom(4096)
-            response = pickle.loads(data)
-            if response.last_ack == 0:
-                state = 3
-            else:
-                stop_thread = True
-                state = 0
+            wait_state_handler(needed_ack=1, next_state=0)
+
+
+if __name__ == '__main__':
+    sender_socket = socket(AF_INET, SOCK_DGRAM)
+    receiver_socket = socket(AF_INET, SOCK_DGRAM)
+    receiver_socket.bind((RECEIVER_IP, RECEIVER_PORT))
+    sending_packets()
